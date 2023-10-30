@@ -296,12 +296,39 @@ void RdmaHw::DeleteRxQp(uint32_t dip, uint16_t pg, uint16_t dport){
 	m_rxQpMap.erase(key);
 }
 
-int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch){
-	uint8_t ecnbits = ch.GetIpv4EcnBits();
+#ifdef MODIFY_ON
+void RdmaHw::feature_Statistics(Ptr<packet> p, uint32_t size){
+	// TODO: 预期行为：把在阈值范围内的流统计在内，其他视为default（抑或是8~64KB均算中等流？）
+	const double threshold = 0.3;
+	if (size>=(1-threshold)*SML_FLOW_SIZE && size<=(1+threshold)*SML_FLOW_SIZE)
+	{
 
+	}
+	else if ()
+	{
+
+	}
+	else if ()
+	{
+
+	}
+	else
+}
+
+#endif
+
+
+int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch){
+
+
+
+	// 获取ipv4 ECN字段
+	uint8_t ecnbits = ch.GetIpv4EcnBits();
+	// 获取实际载荷大小
 	uint32_t payload_size = p->GetSize() - ch.GetSerializedSize();
 
 	// TODO find corresponding rx queue pair
+	// 寻找匹配的接收队列对（rx queue pair）
 	Ptr<RdmaRxQueuePair> rxQp = GetRxQp(ch.dip, ch.sip, ch.udp.dport, ch.udp.sport, ch.udp.pg, true);
 	if (ecnbits != 0){
 		rxQp->m_ecn_source.ecnbits |= ecnbits;
@@ -450,10 +477,22 @@ int RdmaHw::Receive(Ptr<Packet> p, CustomHeader &ch){
 	return 0;
 }
 
+
+/*
+	返回参数：
+	包号连续（满足预期）：
+		1:		正常确认生成ACK包，
+		5:		异常(似乎是数据未对齐？)
+	包号大于预期(后发先到，预期反而未到)：
+		2:		预期的包连续两跳未收到，生成NACK包
+		4:		接收到了上一个预期未收到的包，不为其生成NACK
+	包号小于预期（收到了已确认过的包）
+		3:		表示重复收包
+*/
 int RdmaHw::ReceiverCheckSeq(uint32_t seq, Ptr<RdmaRxQueuePair> q, uint32_t size){
 	uint32_t expected = q->ReceiverNextExpectedSeq;
 	if (seq == expected){
-		q->ReceiverNextExpectedSeq = expected + size;
+		q->ReceiverNextExpm_ack_intervalectedSeq = expected + size;
 		if (q->ReceiverNextExpectedSeq >= q->m_milestone_rx){
 			q->m_milestone_rx += m_ack_interval;
 			return 1; //Generate ACK

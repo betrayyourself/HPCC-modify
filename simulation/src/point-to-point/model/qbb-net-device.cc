@@ -90,6 +90,14 @@ namespace ns3 {
 		}
 		return 0;
 	}
+
+	/*
+		返回参数：
+	!	-1：		当前高优先级队列本身仍有包传输（存疑）
+		-1024：		当前高优先队列没有包传输而转向QP序列（QPS）内查询下一个QP，且所有QP对仍保持连接（所有QP还在工作），且不可用（被暂停、当前没有未传输数据或未在窗口期）
+		others：	当前高优先队列没有包传输而转向QP序列（QPS）内查询下一个QP，清理了已完成的QP后，返回轮询查找到第一个满足条件的QP
+
+	*/
 	int RdmaEgressQueue::GetNextQindex(bool paused[]){
 		bool found = false;
 		uint32_t qIndex;
