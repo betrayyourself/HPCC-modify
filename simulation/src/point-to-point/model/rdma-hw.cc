@@ -296,32 +296,79 @@ void RdmaHw::DeleteRxQp(uint32_t dip, uint16_t pg, uint16_t dport){
 	m_rxQpMap.erase(key);
 }
 
+
+
 #ifdef MODIFY_ON
-void RdmaHw::feature_Statistics(Ptr<packet> p, uint32_t size){
-	// TODO: 预期行为：把在阈值范围内的流统计在内，其他视为default（抑或是8~64KB均算中等流？）
-	const double threshold = 0.3;
-	if (size>=(1-threshold)*SML_FLOW_SIZE && size<=(1+threshold)*SML_FLOW_SIZE)
-	{
 
+std::string RdmaHw::Header2string(CustomHeader &ch){
+	std::string s{};
+	s << ch.sip << ch.dip;
+
+	// 实际上这一分支理想下可省略（目前想测量的必定是UDP），保留以备后用
+	switch(ch.l3Prot)
+	{
+		case 0x6:				// tcp
+			s << ch.tcp.sport << ch.tcp.dport;	break;
+		case 0x11:				// udp
+			s << ch.udp.sport << ch.udp.dport;	break;
+		case 0xFC: case 0xFD:	// ack & nack
+			s << ch.ack.sport << ch.ack.dport;	break;
 	}
-	else if ()
-	{
+	s << ch.l3Prot;
+	return s;
+}
 
-	}
-	else if ()
-	{
+void RdmaHw::feature_Statistics(Ptr<packet> p, CustomHeader &ch){
+	std::string key = Header2string(ch);
+	uint32_t payload_size = p->GetSize() - ch.GetSerializedSize();
+	// 时间精确到1ns
+	uint64 currentPkt = Simulator::Now().GetNanoSeconds();
+	Time gap = currentPkt - flow_last_pkt_time_table[key];
+	Time passedTime = current - flow_first_pkt_time_table[key];
 
+	bool isExist = flow_packet_num_table.find(key);
+	if (isExist)
+	{
+		// ?flow_byte_size_table是指包总共字节数吗？
+		flow_byte_size_table[key] += payload_size;
+		flow_packet_num_table[key]++;
+			
+		if (flow_max_pkt_interval_table[key] < gap)
+			flow_max_pkt_interval_table[key] = gap;
+		if (flow_min_pkt_interval_table[key] > gap)
+			flow_min_pkt_interval_table[key] = gap;
+		flow_last_pkt_time_table[key] = currentPkt;
+
+		if (flow_max_pkt_size_table[key] < payload_size)
+			flow_max_pkt_size_table[key] = payload_size;
+		if (flow_min_pkt_size_table[key] > payload_size)
+			flow_min_pkt_size_table[key] = payload_size;
+
+		// TODO: 关于burst测量所使用的burstThreshold和滞留率beta是计算得出还是预设？
+		// TODO: 后续如果需要的话也许可以添加一个大小流判定算法来自动实现？
+
+		// 这里先直接判断包传输大小了，默认处于下降期预示一个burst过程的结束
+		// ! waiting......
 	}
 	else
+	{
+		flow_byte_size_table.insert({key, payload_size});
+		flow_packet_num_table.insert({key, 1});
+
+		flow_max_pkt_interval_table.insert({key, 0});
+		flow_min_pkt_interval_table.insert({key, 0xffff'ffff'ffff'ffff});
+		
+		flow_max_pkt_size_table.insert({key, payload_size});
+		flow_min_pkt_size_table.insert({key, payload_size});
+
+		// TODO: burst相关统计
+	}
 }
 
 #endif
 
 
 int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch){
-
-
-
 	// 获取ipv4 ECN字段
 	uint8_t ecnbits = ch.GetIpv4EcnBits();
 	// 获取实际载荷大小
@@ -335,7 +382,12 @@ int RdmaHw::ReceiveUdp(Ptr<Packet> p, CustomHeader &ch){
 		rxQp->m_ecn_source.qfb++;
 	}
 	rxQp->m_ecn_source.total++;
+	// !: 这一步到底是什么含义？
 	rxQp->m_milestone_rx = m_ack_interval;
+
+	#ifdef MODIFY_ON
+	feature_Statistics(p, ch);
+	#endif
 
 	int x = ReceiverCheckSeq(ch.udp.seq, rxQp, payload_size);
 	if (x == 1 || x == 2){ //generate ACK or NACK
@@ -474,6 +526,9 @@ int RdmaHw::Receive(Ptr<Packet> p, CustomHeader &ch){
 	}else if (ch.l3Prot == 0xFC){ // ACK
 		ReceiveAck(p, ch);
 	}
+
+	feature_Statistics(p, ch);
+
 	return 0;
 }
 
@@ -492,7 +547,7 @@ int RdmaHw::Receive(Ptr<Packet> p, CustomHeader &ch){
 int RdmaHw::ReceiverCheckSeq(uint32_t seq, Ptr<RdmaRxQueuePair> q, uint32_t size){
 	uint32_t expected = q->ReceiverNextExpectedSeq;
 	if (seq == expected){
-		q->ReceiverNextExpm_ack_intervalectedSeq = expected + size;
+		q->ReceiverNextExpectedSeq = expected + size;
 		if (q->ReceiverNextExpectedSeq >= q->m_milestone_rx){
 			q->m_milestone_rx += m_ack_interval;
 			return 1; //Generate ACK
